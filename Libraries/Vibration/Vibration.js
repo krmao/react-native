@@ -1,46 +1,97 @@
 /**
- * Copyright (c) 2015-present, Facebook, Inc.
- * All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  *
- * @providesModule Vibration
- * @flow
+ * @format
+ * @flow strict
+ * @jsdoc
  */
+
 'use strict';
 
-var RCTVibration = require('NativeModules').Vibration;
-var Platform = require('Platform');
+import NativeVibration from './NativeVibration';
+const Platform = require('../Utilities/Platform');
 
 /**
- * The Vibration API is exposed at `Vibration.vibrate()`.
- * The vibration is asynchronous so this method will return immediately.
+ * Vibration API
  *
- * There will be no effect on devices that do not support Vibration, eg. the simulator.
- *
- * Note for android
- * add `<uses-permission android:name="android.permission.VIBRATE"/>` to `AndroidManifest.xml`
- *
- * Vibration patterns are currently unsupported.
+ * See https://reactnative.dev/docs/vibration.html
  */
 
-var Vibration = {
-  vibrate: function(pattern: number | Array<number> = 400, repeat: boolean = false) {
+let _vibrating: boolean = false;
+let _id: number = 0; // _id is necessary to prevent race condition.
+const _default_vibration_length = 400;
+
+function vibrateByPattern(pattern: Array<number>, repeat: boolean = false) {
+  if (_vibrating) {
+    return;
+  }
+  _vibrating = true;
+  if (pattern[0] === 0) {
+    NativeVibration.vibrate(_default_vibration_length);
+    // $FlowFixMe[reassign-const]
+    pattern = pattern.slice(1);
+  }
+  if (pattern.length === 0) {
+    _vibrating = false;
+    return;
+  }
+  setTimeout(() => vibrateScheduler(++_id, pattern, repeat, 1), pattern[0]);
+}
+
+function vibrateScheduler(
+  id,
+  pattern: Array<number>,
+  repeat: boolean,
+  nextIndex: number,
+) {
+  if (!_vibrating || id !== _id) {
+    return;
+  }
+  NativeVibration.vibrate(_default_vibration_length);
+  if (nextIndex >= pattern.length) {
+    if (repeat) {
+      // $FlowFixMe[reassign-const]
+      nextIndex = 0;
+    } else {
+      _vibrating = false;
+      return;
+    }
+  }
+  setTimeout(
+    () => vibrateScheduler(id, pattern, repeat, nextIndex + 1),
+    pattern[nextIndex],
+  );
+}
+
+const Vibration = {
+  /**
+   * Trigger a vibration with specified `pattern`.
+   *
+   * See https://reactnative.dev/docs/vibration.html#vibrate
+   */
+  vibrate: function(
+    pattern: number | Array<number> = _default_vibration_length,
+    repeat: boolean = false,
+  ) {
     if (Platform.OS === 'android') {
       if (typeof pattern === 'number') {
-        RCTVibration.vibrate(pattern);
+        NativeVibration.vibrate(pattern);
       } else if (Array.isArray(pattern)) {
-        RCTVibration.vibrateByPattern(pattern, repeat ? 0 : -1);
+        NativeVibration.vibrateByPattern(pattern, repeat ? 0 : -1);
       } else {
         throw new Error('Vibration pattern should be a number or array');
       }
     } else {
+      if (_vibrating) {
+        return;
+      }
       if (typeof pattern === 'number') {
-        RCTVibration.vibrate();
+        NativeVibration.vibrate(pattern);
       } else if (Array.isArray(pattern)) {
-        console.warn('Vibration patterns are not supported on iOS');
+        vibrateByPattern(pattern, repeat);
       } else {
         throw new Error('Vibration pattern should be a number or array');
       }
@@ -49,15 +100,15 @@ var Vibration = {
   /**
    * Stop vibration
    *
-   * @platform android
+   * See https://reactnative.dev/docs/vibration.html#cancel
    */
   cancel: function() {
     if (Platform.OS === 'ios') {
-      console.warn('Vibration.cancel is not supported on iOS');
+      _vibrating = false;
     } else {
-      RCTVibration.cancel();
+      NativeVibration.cancel();
     }
-  }
+  },
 };
 
 module.exports = Vibration;

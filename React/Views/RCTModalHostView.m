@@ -1,32 +1,33 @@
-/**
- * Copyright (c) 2015-present, Facebook, Inc.
- * All rights reserved.
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  */
 
 #import "RCTModalHostView.h"
+
+#import <UIKit/UIKit.h>
 
 #import "RCTAssert.h"
 #import "RCTBridge.h"
 #import "RCTModalHostViewController.h"
 #import "RCTTouchHandler.h"
 #import "RCTUIManager.h"
+#import "RCTUtils.h"
 #import "UIView+React.h"
 
-@implementation RCTModalHostView
-{
+@implementation RCTModalHostView {
   __weak RCTBridge *_bridge;
   BOOL _isPresented;
   RCTModalHostViewController *_modalViewController;
   RCTTouchHandler *_touchHandler;
   UIView *_reactSubview;
+  UIInterfaceOrientation _lastKnownOrientation;
 }
 
-RCT_NOT_IMPLEMENTED(- (instancetype)initWithFrame:(CGRect)frame)
-RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:coder)
+RCT_NOT_IMPLEMENTED(-(instancetype)initWithFrame : (CGRect)frame)
+RCT_NOT_IMPLEMENTED(-(instancetype)initWithCoder : coder)
 
 - (instancetype)initWithBridge:(RCTBridge *)bridge
 {
@@ -34,7 +35,7 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:coder)
     _bridge = bridge;
     _modalViewController = [RCTModalHostViewController new];
     UIView *containerView = [UIView new];
-    containerView.autoresizingMask =  UIViewAutoresizingFlexibleHeight | UIViewAutoresizingFlexibleWidth;
+    containerView.autoresizingMask = UIViewAutoresizingFlexibleHeight | UIViewAutoresizingFlexibleWidth;
     _modalViewController.view = containerView;
     _touchHandler = [[RCTTouchHandler alloc] initWithBridge:bridge];
     _isPresented = NO;
@@ -51,17 +52,36 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:coder)
 - (void)notifyForBoundsChange:(CGRect)newBounds
 {
   if (_reactSubview && _isPresented) {
-    [_bridge.uiManager setFrame:newBounds forView:_reactSubview];
+    [_bridge.uiManager setSize:newBounds.size forView:_reactSubview];
+    [self notifyForOrientationChange];
   }
+}
+
+- (void)notifyForOrientationChange
+{
+  if (!_onOrientationChange) {
+    return;
+  }
+
+  UIInterfaceOrientation currentOrientation = [RCTSharedApplication() statusBarOrientation];
+  if (currentOrientation == _lastKnownOrientation) {
+    return;
+  }
+  _lastKnownOrientation = currentOrientation;
+
+  BOOL isPortrait = currentOrientation == UIInterfaceOrientationPortrait ||
+      currentOrientation == UIInterfaceOrientationPortraitUpsideDown;
+  NSDictionary *eventPayload = @{
+    @"orientation" : isPortrait ? @"portrait" : @"landscape",
+  };
+  _onOrientationChange(eventPayload);
 }
 
 - (void)insertReactSubview:(UIView *)subview atIndex:(NSInteger)atIndex
 {
   RCTAssert(_reactSubview == nil, @"Modal view can only have one subview");
   [super insertReactSubview:subview atIndex:atIndex];
-  [subview addGestureRecognizer:_touchHandler];
-  subview.autoresizingMask = UIViewAutoresizingFlexibleHeight |
-                             UIViewAutoresizingFlexibleWidth;
+  [_touchHandler attachToView:subview];
 
   [_modalViewController.view insertSubview:subview atIndex:0];
   _reactSubview = subview;
@@ -70,8 +90,9 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:coder)
 - (void)removeReactSubview:(UIView *)subview
 {
   RCTAssert(subview == _reactSubview, @"Cannot remove view other than modal view");
+  // Superclass (category) removes the `subview` from actual `superview`.
   [super removeReactSubview:subview];
-  [subview removeGestureRecognizer:_touchHandler];
+  [_touchHandler detachFromView:subview];
   _reactSubview = nil;
 }
 
@@ -83,7 +104,7 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:coder)
 - (void)dismissModalViewController
 {
   if (_isPresented) {
-    [_modalViewController dismissViewControllerAnimated:[self hasAnimationType] completion:nil];
+    [_delegate dismissModalHostView:self withViewController:_modalViewController animated:[self hasAnimationType]];
     _isPresented = NO;
   }
 }
@@ -92,19 +113,26 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:coder)
 {
   [super didMoveToWindow];
 
+  // In the case where there is a LayoutAnimation, we will be reinserted into the view hierarchy but only for aesthetic
+  // purposes. In such a case, we should NOT represent the <Modal>.
+  if (!self.userInteractionEnabled && ![self.superview.reactSubviews containsObject:self]) {
+    return;
+  }
+
   if (!_isPresented && self.window) {
     RCTAssert(self.reactViewController, @"Can't present modal view controller without a presenting view controller");
+
+    _modalViewController.supportedInterfaceOrientations = [self supportedOrientationsMask];
 
     if ([self.animationType isEqualToString:@"fade"]) {
       _modalViewController.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
     } else if ([self.animationType isEqualToString:@"slide"]) {
       _modalViewController.modalTransitionStyle = UIModalTransitionStyleCoverVertical;
     }
-    [self.reactViewController presentViewController:_modalViewController animated:[self hasAnimationType] completion:^{
-      if (self->_onShow) {
-        self->_onShow(nil);
-      }
-    }];
+    if (self.presentationStyle != UIModalPresentationNone) {
+      _modalViewController.modalPresentationStyle = self.presentationStyle;
+    }
+    [_delegate presentModalHostView:self withViewController:_modalViewController animated:[self hasAnimationType]];
     _isPresented = YES;
   }
 }
@@ -127,7 +155,7 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:coder)
 
 - (BOOL)isTransparent
 {
-  return _modalViewController.modalPresentationStyle == UIModalPresentationCustom;
+  return _modalViewController.modalPresentationStyle == UIModalPresentationOverFullScreen;
 }
 
 - (BOOL)hasAnimationType
@@ -137,7 +165,39 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:coder)
 
 - (void)setTransparent:(BOOL)transparent
 {
-  _modalViewController.modalPresentationStyle = transparent ? UIModalPresentationCustom : UIModalPresentationFullScreen;
+  if (self.isTransparent != transparent) {
+    return;
+  }
+
+  _modalViewController.modalPresentationStyle =
+      transparent ? UIModalPresentationOverFullScreen : UIModalPresentationFullScreen;
+}
+
+- (UIInterfaceOrientationMask)supportedOrientationsMask
+{
+  if (_supportedOrientations.count == 0) {
+    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
+      return UIInterfaceOrientationMaskAll;
+    } else {
+      return UIInterfaceOrientationMaskPortrait;
+    }
+  }
+
+  UIInterfaceOrientationMask supportedOrientations = 0;
+  for (NSString *orientation in _supportedOrientations) {
+    if ([orientation isEqualToString:@"portrait"]) {
+      supportedOrientations |= UIInterfaceOrientationMaskPortrait;
+    } else if ([orientation isEqualToString:@"portrait-upside-down"]) {
+      supportedOrientations |= UIInterfaceOrientationMaskPortraitUpsideDown;
+    } else if ([orientation isEqualToString:@"landscape"]) {
+      supportedOrientations |= UIInterfaceOrientationMaskLandscape;
+    } else if ([orientation isEqualToString:@"landscape-left"]) {
+      supportedOrientations |= UIInterfaceOrientationMaskLandscapeLeft;
+    } else if ([orientation isEqualToString:@"landscape-right"]) {
+      supportedOrientations |= UIInterfaceOrientationMaskLandscapeRight;
+    }
+  }
+  return supportedOrientations;
 }
 
 @end

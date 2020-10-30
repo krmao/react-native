@@ -1,19 +1,32 @@
-/**
- * Copyright (c) 2015-present, Facebook, Inc.
- * All rights reserved.
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  */
 
 #import "RCTModalHostViewManager.h"
 
 #import "RCTBridge.h"
 #import "RCTModalHostView.h"
-#import "RCTTouchHandler.h"
+#import "RCTModalHostViewController.h"
 #import "RCTShadowView.h"
 #import "RCTUtils.h"
+
+@implementation RCTConvert (RCTModalHostView)
+
+RCT_ENUM_CONVERTER(
+    UIModalPresentationStyle,
+    (@{
+      @"fullScreen" : @(UIModalPresentationFullScreen),
+      @"pageSheet" : @(UIModalPresentationPageSheet),
+      @"formSheet" : @(UIModalPresentationFormSheet),
+      @"overFullScreen" : @(UIModalPresentationOverFullScreen),
+    }),
+    UIModalPresentationFullScreen,
+    integerValue)
+
+@end
 
 @interface RCTModalHostShadowView : RCTShadowView
 
@@ -25,28 +38,75 @@
 {
   [super insertReactSubview:subview atIndex:atIndex];
   if ([subview isKindOfClass:[RCTShadowView class]]) {
-    CGRect frame = {.origin = CGPointZero, .size = RCTScreenSize()};
-    [(RCTShadowView *)subview setFrame:frame];
+    ((RCTShadowView *)subview).size = RCTScreenSize();
   }
 }
 
 @end
 
-@implementation RCTModalHostViewManager
-{
-  NSHashTable *_hostViews;
+@interface RCTModalHostViewManager () <RCTModalHostViewInteractor>
+
+@property (nonatomic, copy) dispatch_block_t dismissWaitingBlock;
+
+@end
+
+@implementation RCTModalHostViewManager {
+  NSPointerArray *_hostViews;
 }
 
 RCT_EXPORT_MODULE()
 
 - (UIView *)view
 {
-  UIView *view = [[RCTModalHostView alloc] initWithBridge:self.bridge];
-  if (_hostViews) {
-    _hostViews = [NSHashTable weakObjectsHashTable];
+  RCTModalHostView *view = [[RCTModalHostView alloc] initWithBridge:self.bridge];
+  view.delegate = self;
+  if (!_hostViews) {
+    _hostViews = [NSPointerArray weakObjectsPointerArray];
   }
-  [_hostViews addObject:view];
+  [_hostViews addPointer:(__bridge void *)view];
   return view;
+}
+
+- (void)presentModalHostView:(RCTModalHostView *)modalHostView
+          withViewController:(RCTModalHostViewController *)viewController
+                    animated:(BOOL)animated
+{
+  dispatch_block_t completionBlock = ^{
+    if (modalHostView.onShow) {
+      modalHostView.onShow(nil);
+    }
+  };
+  if (_presentationBlock) {
+    _presentationBlock([modalHostView reactViewController], viewController, animated, completionBlock);
+  } else {
+    __weak typeof(self) weakself = self;
+    [[modalHostView reactViewController] presentViewController:viewController
+                                                      animated:animated
+                                                    completion:^{
+                                                      !completionBlock ?: completionBlock();
+                                                      __strong typeof(weakself) strongself = weakself;
+                                                      !strongself.dismissWaitingBlock
+                                                          ?: strongself.dismissWaitingBlock();
+                                                      strongself.dismissWaitingBlock = nil;
+                                                    }];
+  }
+}
+
+- (void)dismissModalHostView:(RCTModalHostView *)modalHostView
+          withViewController:(RCTModalHostViewController *)viewController
+                    animated:(BOOL)animated
+{
+  if (_dismissalBlock) {
+    _dismissalBlock([modalHostView reactViewController], viewController, animated, nil);
+  } else {
+    self.dismissWaitingBlock = ^{
+      [viewController.presentingViewController dismissViewControllerAnimated:animated completion:nil];
+    };
+    if (viewController.presentingViewController) {
+      self.dismissWaitingBlock();
+      self.dismissWaitingBlock = nil;
+    }
+  }
 }
 
 - (RCTShadowView *)shadowView
@@ -59,11 +119,15 @@ RCT_EXPORT_MODULE()
   for (RCTModalHostView *hostView in _hostViews) {
     [hostView invalidate];
   }
-  [_hostViews removeAllObjects];
+  _hostViews = nil;
 }
 
 RCT_EXPORT_VIEW_PROPERTY(animationType, NSString)
+RCT_EXPORT_VIEW_PROPERTY(presentationStyle, UIModalPresentationStyle)
 RCT_EXPORT_VIEW_PROPERTY(transparent, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(onShow, RCTDirectEventBlock)
+RCT_EXPORT_VIEW_PROPERTY(identifier, NSNumber)
+RCT_EXPORT_VIEW_PROPERTY(supportedOrientations, NSArray)
+RCT_EXPORT_VIEW_PROPERTY(onOrientationChange, RCTDirectEventBlock)
 
 @end

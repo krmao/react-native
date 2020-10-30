@@ -1,59 +1,68 @@
 /**
- * Copyright (c) 2015-present, Facebook, Inc.
- * All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  *
- * @providesModule RCTNetworking
- * @flow
+ * @format
+ * @flow strict-local
  */
+
 'use strict';
 
-const FormData = require('FormData');
-const NativeEventEmitter = require('NativeEventEmitter');
-const RCTNetworkingNative = require('NativeModules').Networking;
+import NativeEventEmitter from '../EventEmitter/NativeEventEmitter';
+import NativeNetworkingIOS from './NativeNetworkingIOS';
+import type {NativeResponseType} from './XMLHttpRequest';
+import convertRequestBody from './convertRequestBody';
+import type {RequestBody} from './convertRequestBody';
 
 class RCTNetworking extends NativeEventEmitter {
-
   constructor() {
-    super(RCTNetworkingNative);
+    const disableCallsIntoModule =
+      typeof global.__disableRCTNetworkingExtraneousModuleCalls === 'function'
+        ? global.__disableRCTNetworkingExtraneousModuleCalls()
+        : false;
+
+    super(NativeNetworkingIOS, {
+      __SECRET_DISABLE_CALLS_INTO_MODULE_DO_NOT_USE_OR_YOU_WILL_BE_FIRED: disableCallsIntoModule,
+    });
   }
 
   sendRequest(
     method: string,
     trackingName: string,
     url: string,
-    headers: Object,
-    data: string | FormData | {uri: string},
-    responseType: 'text' | 'base64',
+    headers: {...},
+    data: RequestBody,
+    responseType: NativeResponseType,
     incrementalUpdates: boolean,
     timeout: number,
-    callback: (requestId: number) => any
+    callback: (requestId: number) => void,
+    withCredentials: boolean,
   ) {
-    const body =
-      typeof data === 'string' ? {string: data} :
-      data instanceof FormData ? {formData: data.getParts()} :
-      data;
-    RCTNetworkingNative.sendRequest({
-      method,
-      url,
-      data: {...body, trackingName},
-      headers,
-      responseType,
-      incrementalUpdates,
-      timeout
-    }, callback);
+    const body = convertRequestBody(data);
+    NativeNetworkingIOS.sendRequest(
+      {
+        method,
+        url,
+        data: {...body, trackingName},
+        headers,
+        responseType,
+        incrementalUpdates,
+        timeout,
+        withCredentials,
+      },
+      callback,
+    );
   }
 
   abortRequest(requestId: number) {
-    RCTNetworkingNative.abortRequest(requestId);
+    NativeNetworkingIOS.abortRequest(requestId);
   }
 
-  clearCookies(callback: (result: boolean) => any) {
-    console.warn('RCTNetworking.clearCookies is not supported on iOS');
+  clearCookies(callback: (result: boolean) => void) {
+    NativeNetworkingIOS.clearCookies(callback);
   }
 }
 
-module.exports = new RCTNetworking();
+module.exports = (new RCTNetworking(): RCTNetworking);

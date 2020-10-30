@@ -1,28 +1,37 @@
-/**
- * Copyright (c) 2015-present, Facebook, Inc.
- * All rights reserved.
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  */
 
 #import "RCTUtils.h"
 
+#import <dlfcn.h>
 #import <mach/mach_time.h>
 #import <objc/message.h>
+#import <objc/runtime.h>
+#import <zlib.h>
 
 #import <UIKit/UIKit.h>
 
 #import <CommonCrypto/CommonCrypto.h>
 
-#import <zlib.h>
-#import <dlfcn.h>
-
+#import <React/RCTUtilsUIOverride.h>
 #import "RCTAssert.h"
 #import "RCTLog.h"
 
 NSString *const RCTErrorUnspecified = @"EUNSPECIFIED";
+
+// Returns the Path of Home directory
+NSString *__nullable RCTHomePath(void);
+
+// Returns the relative path within the Home for an absolute URL
+// (or nil, if the URL does not specify a path within the Home directory)
+NSString *__nullable RCTHomePathForURL(NSURL *__nullable URL);
+
+// Determines if a given image URL refers to a image in Home directory (~)
+BOOL RCTIsHomeAssetURL(NSURL *__nullable imageURL);
 
 static NSString *__nullable _RCTJSONStringifyNoRetry(id __nullable jsonObject, NSError **error)
 {
@@ -37,33 +46,32 @@ static NSString *__nullable _RCTJSONStringifyNoRetry(id __nullable jsonObject, N
     SEL selector = NSSelectorFromString(@"JSONStringWithOptions:error:");
     if ([NSDictionary instancesRespondToSelector:selector]) {
       JSONKitSelector = selector;
-      collectionTypes = [NSSet setWithObjects:
-                         [NSArray class], [NSMutableArray class],
-                         [NSDictionary class], [NSMutableDictionary class], nil];
+      collectionTypes = [NSSet setWithObjects:[NSArray class],
+                                              [NSMutableArray class],
+                                              [NSDictionary class],
+                                              [NSMutableDictionary class],
+                                              nil];
     }
   });
 
   @try {
-
     // Use JSONKit if available and object is not a fragment
     if (JSONKitSelector && [collectionTypes containsObject:[jsonObject classForCoder]]) {
-      return ((NSString *(*)(id, SEL, int, NSError **))objc_msgSend)(jsonObject, JSONKitSelector, 0, error);
+      return ((NSString * (*)(id, SEL, int, NSError **)) objc_msgSend)(jsonObject, JSONKitSelector, 0, error);
     }
 
     // Use Foundation JSON method
-    NSData *jsonData = [NSJSONSerialization
-                        dataWithJSONObject:jsonObject options:(NSJSONWritingOptions)NSJSONReadingAllowFragments
-                        error:error];
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:jsonObject
+                                                       options:(NSJSONWritingOptions)NSJSONReadingAllowFragments
+                                                         error:error];
 
     return jsonData ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] : nil;
-  }
-  @catch (NSException *exception) {
-
+  } @catch (NSException *exception) {
     // Convert exception to error
     if (error) {
-      *error = [NSError errorWithDomain:RCTErrorDomain code:0 userInfo:@{
-        NSLocalizedDescriptionKey: exception.description ?: @""
-      }];
+      *error = [NSError errorWithDomain:RCTErrorDomain
+                                   code:0
+                               userInfo:@{NSLocalizedDescriptionKey : exception.description ?: @""}];
     }
     return nil;
   }
@@ -77,8 +85,7 @@ NSString *__nullable RCTJSONStringify(id __nullable jsonObject, NSError **error)
     NSError *localError;
     NSString *json = _RCTJSONStringifyNoRetry(jsonObject, &localError);
     if (localError) {
-      RCTLogError(@"RCTJSONStringify() encountered the following error: %@",
-                  localError.localizedDescription);
+      RCTLogError(@"RCTJSONStringify() encountered the following error: %@", localError.localizedDescription);
       // Sanitize the data, then retry. This is slow, but it prevents uncaught
       // data issues from crashing in production
       return _RCTJSONStringifyNoRetry(RCTJSONClean(jsonObject), NULL);
@@ -101,7 +108,6 @@ static id __nullable _RCTJSONParse(NSString *__nullable jsonString, BOOL mutable
   });
 
   if (jsonString) {
-
     // Use JSONKit if available and string is not a fragment
     if (JSONKitSelector) {
       NSInteger length = jsonString.length;
@@ -110,7 +116,7 @@ static id __nullable _RCTJSONParse(NSString *__nullable jsonString, BOOL mutable
         if (strchr("{[", c)) {
           static const int options = (1 << 2); // loose unicode
           SEL selector = mutable ? JSONKitMutableSelector : JSONKitSelector;
-          return ((id (*)(id, SEL, int, NSError **))objc_msgSend)(jsonString, selector, options, error);
+          return ((id(*)(id, SEL, int, NSError **))objc_msgSend)(jsonString, selector, options, error);
         }
         if (!strchr(" \r\n\t", c)) {
           break;
@@ -123,8 +129,10 @@ static id __nullable _RCTJSONParse(NSString *__nullable jsonString, BOOL mutable
     if (!jsonData) {
       jsonData = [jsonString dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:YES];
       if (jsonData) {
-        RCTLogWarn(@"RCTJSONParse received the following string, which could "
-                   "not be losslessly converted to UTF8 data: '%@'", jsonString);
+        RCTLogWarn(
+            @"RCTJSONParse received the following string, which could "
+             "not be losslessly converted to UTF8 data: '%@'",
+            jsonString);
       } else {
         NSString *errorMessage = @"RCTJSONParse received invalid UTF8 data";
         if (error) {
@@ -139,9 +147,7 @@ static id __nullable _RCTJSONParse(NSString *__nullable jsonString, BOOL mutable
     if (mutable) {
       options |= NSJSONReadingMutableContainers;
     }
-    return [NSJSONSerialization JSONObjectWithData:jsonData
-                                           options:options
-                                             error:error];
+    return [NSJSONSerialization JSONObjectWithData:jsonData options:options error:error];
   }
   return nil;
 }
@@ -161,12 +167,8 @@ id RCTJSONClean(id object)
   static dispatch_once_t onceToken;
   static NSSet<Class> *validLeafTypes;
   dispatch_once(&onceToken, ^{
-    validLeafTypes = [[NSSet alloc] initWithArray:@[
-      [NSString class],
-      [NSMutableString class],
-      [NSNumber class],
-      [NSNull class],
-    ]];
+    validLeafTypes =
+        [[NSSet alloc] initWithArray:@ [[NSString class], [NSMutableString class], [NSNumber class], [NSNull class], ]];
   });
 
   if ([validLeafTypes containsObject:[object classForCoder]]) {
@@ -222,11 +224,22 @@ NSString *RCTMD5Hash(NSString *string)
   CC_MD5(str, (CC_LONG)strlen(str), result);
 
   return [NSString stringWithFormat:@"%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
-    result[0], result[1], result[2], result[3],
-    result[4], result[5], result[6], result[7],
-    result[8], result[9], result[10], result[11],
-    result[12], result[13], result[14], result[15]
-  ];
+                                    result[0],
+                                    result[1],
+                                    result[2],
+                                    result[3],
+                                    result[4],
+                                    result[5],
+                                    result[6],
+                                    result[7],
+                                    result[8],
+                                    result[9],
+                                    result[10],
+                                    result[11],
+                                    result[12],
+                                    result[13],
+                                    result[14],
+                                    result[15]];
 }
 
 BOOL RCTIsMainQueue()
@@ -234,8 +247,7 @@ BOOL RCTIsMainQueue()
   static void *mainQueueKey = &mainQueueKey;
   static dispatch_once_t onceToken;
   dispatch_once(&onceToken, ^{
-    dispatch_queue_set_specific(dispatch_get_main_queue(),
-                                mainQueueKey, mainQueueKey, NULL);
+    dispatch_queue_set_specific(dispatch_get_main_queue(), mainQueueKey, mainQueueKey, NULL);
   });
   return dispatch_get_specific(mainQueueKey) == mainQueueKey;
 }
@@ -251,32 +263,69 @@ void RCTExecuteOnMainQueue(dispatch_block_t block)
   }
 }
 
-void RCTExecuteOnMainThread(dispatch_block_t block, BOOL sync)
+// Please do not use this method
+// unless you know what you are doing.
+void RCTUnsafeExecuteOnMainQueueSync(dispatch_block_t block)
 {
   if (RCTIsMainQueue()) {
     block();
-  } else if (sync) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
-      block();
-    });
   } else {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    dispatch_sync(dispatch_get_main_queue(), ^{
       block();
     });
   }
 }
 
+static void RCTUnsafeExecuteOnMainQueueOnceSync(dispatch_once_t *onceToken, dispatch_block_t block)
+{
+  // The solution was borrowed from a post by Ben Alpert:
+  // https://benalpert.com/2014/04/02/dispatch-once-initialization-on-the-main-thread.html
+  // See also: https://www.mikeash.com/pyblog/friday-qa-2014-06-06-secrets-of-dispatch_once.html
+  if (RCTIsMainQueue()) {
+    dispatch_once(onceToken, block);
+  } else {
+    if (DISPATCH_EXPECT(*onceToken == 0L, NO)) {
+      dispatch_sync(dispatch_get_main_queue(), ^{
+        dispatch_once(onceToken, block);
+      });
+    }
+  }
+}
+
 CGFloat RCTScreenScale()
 {
-  static CGFloat scale;
   static dispatch_once_t onceToken;
-  dispatch_once(&onceToken, ^{
-    RCTExecuteOnMainThread(^{
-      scale = [UIScreen mainScreen].scale;
-    }, YES);
+  static CGFloat scale;
+
+  RCTUnsafeExecuteOnMainQueueOnceSync(&onceToken, ^{
+    scale = [UIScreen mainScreen].scale;
   });
 
   return scale;
+}
+
+CGFloat RCTFontSizeMultiplier()
+{
+  static NSDictionary<NSString *, NSNumber *> *mapping;
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    mapping = @{
+      UIContentSizeCategoryExtraSmall : @0.823,
+      UIContentSizeCategorySmall : @0.882,
+      UIContentSizeCategoryMedium : @0.941,
+      UIContentSizeCategoryLarge : @1.0,
+      UIContentSizeCategoryExtraLarge : @1.118,
+      UIContentSizeCategoryExtraExtraLarge : @1.235,
+      UIContentSizeCategoryExtraExtraExtraLarge : @1.353,
+      UIContentSizeCategoryAccessibilityMedium : @1.786,
+      UIContentSizeCategoryAccessibilityLarge : @2.143,
+      UIContentSizeCategoryAccessibilityExtraLarge : @2.643,
+      UIContentSizeCategoryAccessibilityExtraExtraLarge : @3.143,
+      UIContentSizeCategoryAccessibilityExtraExtraExtraLarge : @3.571
+    };
+  });
+
+  return mapping[RCTSharedApplication().preferredContentSizeCategory].floatValue;
 }
 
 CGSize RCTScreenSize()
@@ -288,12 +337,18 @@ CGSize RCTScreenSize()
   static CGSize size;
   static dispatch_once_t onceToken;
   dispatch_once(&onceToken, ^{
-    RCTExecuteOnMainThread(^{
+    RCTUnsafeExecuteOnMainQueueSync(^{
       size = [UIScreen mainScreen].bounds.size;
-    }, YES);
+    });
   });
 
   return size;
+}
+
+CGSize RCTViewportSize()
+{
+  UIWindow *window = RCTKeyWindow();
+  return window ? window.bounds.size : RCTScreenSize();
 }
 
 CGFloat RCTRoundPixelValue(CGFloat value)
@@ -317,8 +372,8 @@ CGFloat RCTFloorPixelValue(CGFloat value)
 CGSize RCTSizeInPixels(CGSize pointSize, CGFloat scale)
 {
   return (CGSize){
-    ceil(pointSize.width * scale),
-    ceil(pointSize.height * scale),
+      ceil(pointSize.width * scale),
+      ceil(pointSize.height * scale),
   };
 }
 
@@ -356,6 +411,19 @@ void RCTSwapInstanceMethods(Class cls, SEL original, SEL replacement)
   }
 }
 
+void RCTSwapInstanceMethodWithBlock(Class cls, SEL original, id replacementBlock, SEL replacementSelector)
+{
+  Method originalMethod = class_getInstanceMethod(cls, original);
+  if (!originalMethod) {
+    return;
+  }
+
+  IMP implementation = imp_implementationWithBlock(replacementBlock);
+  class_addMethod(cls, replacementSelector, implementation, method_getTypeEncoding(originalMethod));
+  Method newMethod = class_getInstanceMethod(cls, replacementSelector);
+  method_exchangeImplementations(originalMethod, newMethod);
+}
+
 BOOL RCTClassOverridesClassMethod(Class cls, SEL selector)
 {
   return RCTClassOverridesInstanceMethod(object_getClass(cls), selector);
@@ -375,9 +443,8 @@ BOOL RCTClassOverridesInstanceMethod(Class cls, SEL selector)
   return NO;
 }
 
-NSDictionary<NSString *, id> *RCTMakeError(NSString *message,
-                                           id __nullable toStringify,
-                                           NSDictionary<NSString *, id> *__nullable extraData)
+NSDictionary<NSString *, id>
+    *RCTMakeError(NSString *message, id __nullable toStringify, NSDictionary<NSString *, id> *__nullable extraData)
 {
   if (toStringify) {
     message = [message stringByAppendingString:[toStringify description]];
@@ -388,9 +455,8 @@ NSDictionary<NSString *, id> *RCTMakeError(NSString *message,
   return error;
 }
 
-NSDictionary<NSString *, id> *RCTMakeAndLogError(NSString *message,
-                                                 id __nullable toStringify,
-                                                 NSDictionary<NSString *, id> *__nullable extraData)
+NSDictionary<NSString *, id> *
+RCTMakeAndLogError(NSString *message, id __nullable toStringify, NSDictionary<NSString *, id> *__nullable extraData)
 {
   NSDictionary<NSString *, id> *error = RCTMakeError(message, toStringify, extraData);
   RCTLogError(@"\nError: %@", error);
@@ -399,30 +465,41 @@ NSDictionary<NSString *, id> *RCTMakeAndLogError(NSString *message,
 
 NSDictionary<NSString *, id> *RCTJSErrorFromNSError(NSError *error)
 {
-  NSString *codeWithDomain = [NSString stringWithFormat:@"E%@%zd", error.domain.uppercaseString, error.code];
-  return RCTJSErrorFromCodeMessageAndNSError(codeWithDomain,
-                                             error.localizedDescription,
-                                             error);
+  NSString *codeWithDomain =
+      [NSString stringWithFormat:@"E%@%lld", error.domain.uppercaseString, (long long)error.code];
+  return RCTJSErrorFromCodeMessageAndNSError(codeWithDomain, error.localizedDescription, error);
 }
 
 // TODO: Can we just replace RCTMakeError with this function instead?
-NSDictionary<NSString *, id> *RCTJSErrorFromCodeMessageAndNSError(NSString *code,
-                                                                  NSString *message,
-                                                                  NSError *__nullable error)
+NSDictionary<NSString *, id>
+    *RCTJSErrorFromCodeMessageAndNSError(NSString *code, NSString *message, NSError *__nullable error)
 {
   NSString *errorMessage;
   NSArray<NSString *> *stackTrace = [NSThread callStackSymbols];
-  NSMutableDictionary<NSString *, id> *errorInfo =
-  [NSMutableDictionary dictionaryWithObject:stackTrace forKey:@"nativeStackIOS"];
+  NSMutableDictionary *userInfo;
+  NSMutableDictionary<NSString *, id> *errorInfo = [NSMutableDictionary dictionaryWithObject:stackTrace
+                                                                                      forKey:@"nativeStackIOS"];
 
   if (error) {
     errorMessage = error.localizedDescription ?: @"Unknown error from a native module";
     errorInfo[@"domain"] = error.domain ?: RCTErrorDomain;
+    if (error.userInfo) {
+      userInfo = [error.userInfo mutableCopy];
+      if (userInfo != nil && userInfo[NSUnderlyingErrorKey] != nil) {
+        NSError *underlyingError = error.userInfo[NSUnderlyingErrorKey];
+        NSString *underlyingCode = [NSString stringWithFormat:@"%d", (int)underlyingError.code];
+        userInfo[NSUnderlyingErrorKey] =
+            RCTJSErrorFromCodeMessageAndNSError(underlyingCode, @"underlying error", underlyingError);
+      }
+    }
   } else {
     errorMessage = @"Unknown error from a native module";
     errorInfo[@"domain"] = RCTErrorDomain;
+    userInfo = nil;
   }
   errorInfo[@"code"] = code ?: RCTErrorUnspecified;
+  errorInfo[@"userInfo"] = RCTNullIfNil(userInfo);
+
   // Allow for explicit overriding of the error message
   errorMessage = message ?: errorMessage;
 
@@ -434,7 +511,9 @@ BOOL RCTRunningInTestEnvironment(void)
   static BOOL isTestEnvironment = NO;
   static dispatch_once_t onceToken;
   dispatch_once(&onceToken, ^{
-    isTestEnvironment = NSClassFromString(@"SenTestCase") || NSClassFromString(@"XCTest");
+    NSDictionary *environment = [[NSProcessInfo processInfo] environment];
+    isTestEnvironment = objc_lookUpClass("SenTestCase") || objc_lookUpClass("XCTest") ||
+        objc_lookUpClass("SnapshotTestAppDelegate") || [environment[@"IS_TESTING"] boolValue];
   });
   return isTestEnvironment;
 }
@@ -459,19 +538,25 @@ UIWindow *__nullable RCTKeyWindow(void)
   }
 
   // TODO: replace with a more robust solution
-  return RCTSharedApplication().keyWindow;
+  for (UIWindow *window in RCTSharedApplication().windows) {
+    if (window.keyWindow) {
+      return window;
+    }
+  }
+  return nil;
 }
 
 UIViewController *__nullable RCTPresentedViewController(void)
 {
-  if (RCTRunningInAppExtension()) {
-    return nil;
+  if ([RCTUtilsUIOverride hasPresentedViewController]) {
+    return [RCTUtilsUIOverride presentedViewController];
   }
 
   UIViewController *controller = RCTKeyWindow().rootViewController;
-
-  while (controller.presentedViewController) {
-    controller = controller.presentedViewController;
+  UIViewController *presentedController = controller.presentedViewController;
+  while (presentedController && ![presentedController isBeingDismissed]) {
+    controller = presentedController;
+    presentedController = controller.presentedViewController;
   }
 
   return controller;
@@ -482,53 +567,28 @@ BOOL RCTForceTouchAvailable(void)
   static BOOL forceSupported;
   static dispatch_once_t onceToken;
   dispatch_once(&onceToken, ^{
-    forceSupported = [UITraitCollection class] &&
-    [UITraitCollection instancesRespondToSelector:@selector(forceTouchCapability)];
+    forceSupported =
+        [UITraitCollection class] && [UITraitCollection instancesRespondToSelector:@selector(forceTouchCapability)];
   });
 
   return forceSupported &&
-    (RCTKeyWindow() ?: [UIView new]).traitCollection.forceTouchCapability == UIForceTouchCapabilityAvailable;
-}
-
-UIAlertView *__nullable RCTAlertView(NSString *title,
-                                     NSString *__nullable message,
-                                     id __nullable delegate,
-                                     NSString *__nullable cancelButtonTitle,
-                                     NSArray<NSString *> *__nullable otherButtonTitles)
-{
-  if (RCTRunningInAppExtension()) {
-    RCTLogError(@"RCTAlertView is unavailable when running in an app extension");
-    return nil;
-  }
-
-  UIAlertView *alertView = [UIAlertView new];
-  alertView.title = title;
-  alertView.message = message;
-  alertView.delegate = delegate;
-  if (cancelButtonTitle != nil) {
-    [alertView addButtonWithTitle:cancelButtonTitle];
-    alertView.cancelButtonIndex = 0;
-  }
-  for (NSString *buttonTitle in otherButtonTitles) {
-    [alertView addButtonWithTitle:buttonTitle];
-  }
-  return alertView;
+      (RCTKeyWindow() ?: [UIView new]).traitCollection.forceTouchCapability == UIForceTouchCapabilityAvailable;
 }
 
 NSError *RCTErrorWithMessage(NSString *message)
 {
-  NSDictionary<NSString *, id> *errorInfo = @{NSLocalizedDescriptionKey: message};
+  NSDictionary<NSString *, id> *errorInfo = @{NSLocalizedDescriptionKey : message};
   return [[NSError alloc] initWithDomain:RCTErrorDomain code:0 userInfo:errorInfo];
 }
 
-id RCTNullIfNil(id __nullable value)
+NSError *RCTErrorWithNSException(NSException *exception)
 {
-  return value ?: (id)kCFNull;
-}
-
-id __nullable RCTNilIfNull(id __nullable value)
-{
-  return value == (id)kCFNull ? nil : value;
+  NSString *message = [NSString stringWithFormat:@"NSException: %@; trace: %@.",
+                                                 exception,
+                                                 [[exception callStackSymbols] componentsJoinedByString:@";"]];
+  NSDictionary<NSString *, id> *errorInfo =
+      @{NSLocalizedDescriptionKey : message, RCTObjCStackTraceKey : [exception callStackSymbols]};
+  return [[NSError alloc] initWithDomain:RCTErrorDomain code:0 userInfo:errorInfo];
 }
 
 double RCTZeroIfNaN(double value)
@@ -536,11 +596,22 @@ double RCTZeroIfNaN(double value)
   return isnan(value) || isinf(value) ? 0 : value;
 }
 
+double RCTSanitizeNaNValue(double value, NSString *property)
+{
+  if (!isnan(value) && !isinf(value)) {
+    return value;
+  }
+
+  RCTLogWarn(@"The value `%@` equals NaN or INF and will be replaced by `0`.", property);
+  return 0;
+}
+
 NSURL *RCTDataURL(NSString *mimeType, NSData *data)
 {
-  return [NSURL URLWithString:
-          [NSString stringWithFormat:@"data:%@;base64,%@", mimeType,
-           [data base64EncodedStringWithOptions:(NSDataBase64EncodingOptions)0]]];
+  return [NSURL
+      URLWithString:[NSString stringWithFormat:@"data:%@;base64,%@",
+                                               mimeType,
+                                               [data base64EncodedStringWithOptions:(NSDataBase64EncodingOptions)0]]];
 }
 
 BOOL RCTIsGzippedData(NSData *__nullable); // exposed for unit testing purposes
@@ -573,7 +644,7 @@ NSData *__nullable RCTGzipData(NSData *__nullable input, float level)
   static const NSUInteger RCTGZipChunkSize = 16384;
 
   NSMutableData *output = nil;
-  int compression = (level < 0.0f)? Z_DEFAULT_COMPRESSION: (int)(roundf(level * 9));
+  int compression = (level < 0.0f) ? Z_DEFAULT_COMPRESSION : (int)(roundf(level * 9));
   if (deflateInit2(&stream, compression, Z_DEFLATED, 31, 8, Z_DEFAULT_STRATEGY) == Z_OK) {
     output = [NSMutableData dataWithLength:RCTGZipChunkSize];
     while (stream.avail_out == 0) {
@@ -593,43 +664,180 @@ NSData *__nullable RCTGzipData(NSData *__nullable input, float level)
   return output;
 }
 
-NSString *__nullable  RCTBundlePathForURL(NSURL *__nullable URL)
+static NSString *RCTRelativePathForURL(NSString *basePath, NSURL *__nullable URL)
 {
   if (!URL.fileURL) {
     // Not a file path
     return nil;
   }
-  NSString *path = URL.path;
-  NSString *bundlePath = [[NSBundle mainBundle] resourcePath];
-  if (![path hasPrefix:bundlePath]) {
+  NSString *path = [NSString stringWithUTF8String:[URL fileSystemRepresentation]];
+  if (![path hasPrefix:basePath]) {
     // Not a bundle-relative file
     return nil;
   }
-  path = [path substringFromIndex:bundlePath.length];
+  path = [path substringFromIndex:basePath.length];
   if ([path hasPrefix:@"/"]) {
     path = [path substringFromIndex:1];
   }
   return path;
 }
 
-BOOL RCTIsXCAssetURL(NSURL *__nullable imageURL)
+NSString *__nullable RCTLibraryPath(void)
 {
-  NSString *name = RCTBundlePathForURL(imageURL);
-  if (name.pathComponents.count != 1) {
-    // URL is invalid, or is a file path, not an XCAsset identifier
-    return NO;
+  static NSString *libraryPath = nil;
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    libraryPath = [NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES) lastObject];
+  });
+  return libraryPath;
+}
+
+NSString *__nullable RCTHomePath(void)
+{
+  static NSString *homePath = nil;
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    homePath = NSHomeDirectory();
+  });
+  return homePath;
+}
+
+NSString *__nullable RCTBundlePathForURL(NSURL *__nullable URL)
+{
+  return RCTRelativePathForURL([[NSBundle mainBundle] resourcePath], URL);
+}
+
+NSString *__nullable RCTLibraryPathForURL(NSURL *__nullable URL)
+{
+  return RCTRelativePathForURL(RCTLibraryPath(), URL);
+}
+
+NSString *__nullable RCTHomePathForURL(NSURL *__nullable URL)
+{
+  return RCTRelativePathForURL(RCTHomePath(), URL);
+}
+
+static BOOL RCTIsImageAssetsPath(NSString *path)
+{
+  NSString *extension = [path pathExtension];
+  return [extension isEqualToString:@"png"] || [extension isEqualToString:@"jpg"];
+}
+
+BOOL RCTIsBundleAssetURL(NSURL *__nullable imageURL)
+{
+  return RCTIsImageAssetsPath(RCTBundlePathForURL(imageURL));
+}
+
+BOOL RCTIsLibraryAssetURL(NSURL *__nullable imageURL)
+{
+  return RCTIsImageAssetsPath(RCTLibraryPathForURL(imageURL));
+}
+
+BOOL RCTIsHomeAssetURL(NSURL *__nullable imageURL)
+{
+  return RCTIsImageAssetsPath(RCTHomePathForURL(imageURL));
+}
+
+BOOL RCTIsLocalAssetURL(NSURL *__nullable imageURL)
+{
+  return RCTIsBundleAssetURL(imageURL) || RCTIsHomeAssetURL(imageURL);
+}
+
+static NSString *bundleName(NSBundle *bundle)
+{
+  NSString *name = bundle.infoDictionary[@"CFBundleName"];
+  if (!name) {
+    name = [[bundle.bundlePath lastPathComponent] stringByDeletingPathExtension];
   }
-  NSString *extension = [name pathExtension];
-  if (extension.length && ![extension isEqualToString:@"png"]) {
-    // Not a png
-    return NO;
+  return name;
+}
+
+static NSBundle *bundleForPath(NSString *key)
+{
+  static NSMutableDictionary *bundleCache;
+  if (!bundleCache) {
+    bundleCache = [NSMutableDictionary new];
+    bundleCache[@"main"] = [NSBundle mainBundle];
+
+    // Initialize every bundle in the array
+    for (NSString *path in [[NSBundle mainBundle] pathsForResourcesOfType:@"bundle" inDirectory:nil]) {
+      [NSBundle bundleWithPath:path];
+    }
+
+    // The bundles initialized above will now also be in `allBundles`
+    for (NSBundle *bundle in [NSBundle allBundles]) {
+      bundleCache[bundleName(bundle)] = bundle;
+    }
   }
-  extension = extension.length ? nil : @"png";
-  if ([[NSBundle mainBundle] pathForResource:name ofType:extension]) {
-    // File actually exists in bundle, so is not an XCAsset
-    return NO;
+
+  return bundleCache[key];
+}
+
+UIImage *__nullable RCTImageFromLocalBundleAssetURL(NSURL *imageURL)
+{
+  if (![imageURL.scheme isEqualToString:@"file"]) {
+    // We only want to check for local file assets
+    return nil;
   }
-  return YES;
+  // Get the bundle URL, and add the image URL
+  // Note that we have to add both host and path, since host is the first "assets" part
+  // while path is the rest of the URL
+  NSURL *bundleImageUrl = [[[NSBundle mainBundle] bundleURL]
+      URLByAppendingPathComponent:[imageURL.host stringByAppendingString:imageURL.path]];
+  return RCTImageFromLocalAssetURL(bundleImageUrl);
+}
+
+UIImage *__nullable RCTImageFromLocalAssetURL(NSURL *imageURL)
+{
+  NSString *imageName = RCTBundlePathForURL(imageURL);
+
+  NSBundle *bundle = nil;
+  NSArray *imagePathComponents = [imageName pathComponents];
+  if ([imagePathComponents count] > 1 &&
+      [[[imagePathComponents firstObject] pathExtension] isEqualToString:@"bundle"]) {
+    NSString *bundlePath = [imagePathComponents firstObject];
+    bundle = bundleForPath([bundlePath stringByDeletingPathExtension]);
+    imageName = [imageName substringFromIndex:(bundlePath.length + 1)];
+  }
+
+  UIImage *image = nil;
+  if (imageName) {
+    if (bundle) {
+      image = [UIImage imageNamed:imageName inBundle:bundle compatibleWithTraitCollection:nil];
+    } else {
+      image = [UIImage imageNamed:imageName];
+    }
+  }
+
+  if (!image) {
+    // Attempt to load from the file system
+    const char *fileSystemCString = [imageURL fileSystemRepresentation];
+    if (fileSystemCString != NULL) {
+      NSString *filePath = [NSString stringWithUTF8String:fileSystemCString];
+      if (filePath.pathExtension.length == 0) {
+        filePath = [filePath stringByAppendingPathExtension:@"png"];
+      }
+      image = [UIImage imageWithContentsOfFile:filePath];
+    }
+  }
+
+  if (!image && !bundle) {
+    // We did not find the image in the mainBundle, check in other shipped frameworks.
+    NSArray<NSURL *> *possibleFrameworks =
+        [[NSFileManager defaultManager] contentsOfDirectoryAtURL:[[NSBundle mainBundle] privateFrameworksURL]
+                                      includingPropertiesForKeys:@[]
+                                                         options:0
+                                                           error:nil];
+    for (NSURL *frameworkURL in possibleFrameworks) {
+      bundle = [NSBundle bundleWithURL:frameworkURL];
+      image = [UIImage imageNamed:imageName inBundle:bundle compatibleWithTraitCollection:nil];
+      if (image) {
+        RCTLogWarn(@"Image %@ not found in mainBundle, but found in %@", imageName, bundle);
+        break;
+      }
+    }
+  }
+  return image;
 }
 
 RCT_EXTERN NSString *__nullable RCTTempFilePath(NSString *extension, NSError **error)
@@ -677,22 +885,19 @@ RCT_EXTERN NSString *__nullable RCTTempFilePath(NSString *extension, NSError **e
   return [directory stringByAppendingPathComponent:filename];
 }
 
-static void RCTGetRGBAColorComponents(CGColorRef color, CGFloat rgba[4])
+RCT_EXTERN void RCTGetRGBAColorComponents(CGColorRef color, CGFloat rgba[4])
 {
   CGColorSpaceModel model = CGColorSpaceGetModel(CGColorGetColorSpace(color));
   const CGFloat *components = CGColorGetComponents(color);
-  switch (model)
-  {
-    case kCGColorSpaceModelMonochrome:
-    {
+  switch (model) {
+    case kCGColorSpaceModelMonochrome: {
       rgba[0] = components[0];
       rgba[1] = components[0];
       rgba[2] = components[0];
       rgba[3] = components[1];
       break;
     }
-    case kCGColorSpaceModelRGB:
-    {
+    case kCGColorSpaceModelRGB: {
       rgba[0] = components[0];
       rgba[1] = components[1];
       rgba[2] = components[2];
@@ -705,10 +910,10 @@ static void RCTGetRGBAColorComponents(CGColorRef color, CGFloat rgba[4])
     case kCGColorSpaceModelLab:
     case kCGColorSpaceModelPattern:
     case kCGColorSpaceModelUnknown:
-    {
-
-#ifdef RCT_DEBUG
-      //unsupported format
+    // TODO: kCGColorSpaceModelXYZ should be added sometime after Xcode 10 release.
+    default: {
+#if RCT_DEBUG
+      // unsupported format
       RCTLogError(@"Unsupported color model: %i", model);
 #endif
 
@@ -725,10 +930,10 @@ NSString *RCTColorToHexString(CGColorRef color)
 {
   CGFloat rgba[4];
   RCTGetRGBAColorComponents(color, rgba);
-  uint8_t r = rgba[0]*255;
-  uint8_t g = rgba[1]*255;
-  uint8_t b = rgba[2]*255;
-  uint8_t a = rgba[3]*255;
+  uint8_t r = rgba[0] * 255;
+  uint8_t g = rgba[1] * 255;
+  uint8_t b = rgba[2] * 255;
+  uint8_t a = rgba[3] * 255;
   if (a < 255) {
     return [NSString stringWithFormat:@"#%02x%02x%02x%02x", r, g, b, a];
   } else {
@@ -743,23 +948,36 @@ NSString *RCTUIKitLocalizedString(NSString *string)
   return UIKitBundle ? [UIKitBundle localizedStringForKey:string value:string table:nil] : string;
 }
 
+NSString *RCTHumanReadableType(NSObject *obj)
+{
+  if ([obj isKindOfClass:[NSString class]]) {
+    return @"string";
+  } else if ([obj isKindOfClass:[NSNumber class]]) {
+    int intVal = [(NSNumber *)obj intValue];
+    if (intVal == 0 || intVal == 1) {
+      return @"boolean or number";
+    }
+
+    return @"number";
+  } else {
+    return NSStringFromClass([obj class]);
+  }
+}
+
 NSString *__nullable RCTGetURLQueryParam(NSURL *__nullable URL, NSString *param)
 {
   RCTAssertParam(param);
   if (!URL) {
     return nil;
   }
-  NSURLComponents *components = [NSURLComponents componentsWithURL:URL
-                                           resolvingAgainstBaseURL:YES];
 
-  // TODO: use NSURLComponents.queryItems once we drop support for iOS 7
-  for (NSString *item in [components.percentEncodedQuery componentsSeparatedByString:@"&"].reverseObjectEnumerator) {
-    NSArray *keyValue = [item componentsSeparatedByString:@"="];
-    NSString *key = [keyValue.firstObject stringByRemovingPercentEncoding];
-    if ([key isEqualToString:param]) {
-      return [keyValue.lastObject stringByRemovingPercentEncoding];
+  NSURLComponents *components = [NSURLComponents componentsWithURL:URL resolvingAgainstBaseURL:YES];
+  for (NSURLQueryItem *queryItem in [components.queryItems reverseObjectEnumerator]) {
+    if ([queryItem.name isEqualToString:param]) {
+      return queryItem.value;
     }
   }
+
   return nil;
 }
 
@@ -769,50 +987,72 @@ NSURL *__nullable RCTURLByReplacingQueryParam(NSURL *__nullable URL, NSString *p
   if (!URL) {
     return nil;
   }
-  NSURLComponents *components = [NSURLComponents componentsWithURL:URL
-                                           resolvingAgainstBaseURL:YES];
 
-  // TODO: use NSURLComponents.queryItems once we drop support for iOS 7
-
-  // Unhelpfully, iOS doesn't provide this set as a constant
-  static NSCharacterSet *URLParamCharacterSet;
-  static dispatch_once_t onceToken;
-  dispatch_once(&onceToken, ^{
-    NSMutableCharacterSet *characterSet = [NSMutableCharacterSet new];
-    [characterSet formUnionWithCharacterSet:[NSCharacterSet URLQueryAllowedCharacterSet]];
-    [characterSet removeCharactersInString:@"&=?"];
-    URLParamCharacterSet = [characterSet copy];
-  });
-
-  NSString *encodedParam =
-  [param stringByAddingPercentEncodingWithAllowedCharacters:URLParamCharacterSet];
+  NSURLComponents *components = [NSURLComponents componentsWithURL:URL resolvingAgainstBaseURL:YES];
 
   __block NSInteger paramIndex = NSNotFound;
-  NSMutableArray *queryItems = [[components.percentEncodedQuery componentsSeparatedByString:@"&"] mutableCopy];
-  [queryItems enumerateObjectsWithOptions:NSEnumerationReverse usingBlock:
-   ^(NSString *item, NSUInteger i, BOOL *stop) {
-     NSArray *keyValue = [item componentsSeparatedByString:@"="];
-     if ([keyValue.firstObject isEqualToString:encodedParam]) {
-       paramIndex = i;
-       *stop = YES;
-     }
-   }];
+  NSMutableArray<NSURLQueryItem *> *queryItems = [components.queryItems mutableCopy];
+  [queryItems enumerateObjectsWithOptions:NSEnumerationReverse
+                               usingBlock:^(NSURLQueryItem *item, NSUInteger i, BOOL *stop) {
+                                 if ([item.name isEqualToString:param]) {
+                                   paramIndex = i;
+                                   *stop = YES;
+                                 }
+                               }];
 
   if (!value) {
     if (paramIndex != NSNotFound) {
       [queryItems removeObjectAtIndex:paramIndex];
     }
   } else {
-    NSString *encodedValue =
-    [value stringByAddingPercentEncodingWithAllowedCharacters:URLParamCharacterSet];
-
-    NSString *newItem = [encodedParam stringByAppendingFormat:@"=%@", encodedValue];
+    NSURLQueryItem *newItem = [NSURLQueryItem queryItemWithName:param value:value];
     if (paramIndex == NSNotFound) {
       [queryItems addObject:newItem];
     } else {
       [queryItems replaceObjectAtIndex:paramIndex withObject:newItem];
     }
   }
-  components.percentEncodedQuery = [queryItems componentsJoinedByString:@"&"];
+  components.queryItems = queryItems;
   return components.URL;
+}
+
+RCT_EXTERN NSString *RCTDropReactPrefixes(NSString *s)
+{
+  if ([s hasPrefix:@"RK"]) {
+    return [s substringFromIndex:2];
+  } else if ([s hasPrefix:@"RCT"]) {
+    return [s substringFromIndex:3];
+  }
+
+  return s;
+}
+
+RCT_EXTERN BOOL RCTUIManagerTypeForTagIsFabric(NSNumber *reactTag)
+{
+  // See https://github.com/facebook/react/pull/12587
+  return [reactTag integerValue] % 2 == 0;
+}
+
+RCT_EXTERN BOOL RCTValidateTypeOfViewCommandArgument(
+    NSObject *obj,
+    id expectedClass,
+    NSString const *expectedType,
+    NSString const *componentName,
+    NSString const *commandName,
+    NSString const *argPos)
+{
+  if (![obj isKindOfClass:expectedClass]) {
+    NSString *kindOfClass = RCTHumanReadableType(obj);
+
+    RCTLogError(
+        @"%@ command %@ received %@ argument of type %@, expected %@.",
+        componentName,
+        commandName,
+        argPos,
+        kindOfClass,
+        expectedType);
+    return false;
+  }
+
+  return true;
 }

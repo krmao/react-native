@@ -1,27 +1,25 @@
 /**
- * Copyright (c) 2013-present, Facebook, Inc.
- * All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  *
- * @providesModule InitialPropsTestApp
+ * @format
  */
 
 'use strict';
 
-var React = require('React');
-var RecordingModule = require('NativeModules').InitialPropsRecordingModule;
-var Text = require('Text');
+const React = require('react');
+const {NativeModules, Text} = require('react-native');
 
-var InitialPropsTestApp = React.createClass({
-  componentDidMount: function() {
-    RecordingModule.recordProps(this.props);
-  },
-  render: function() {
+class InitialPropsTestApp extends React.Component {
+  componentDidMount() {
+    NativeModules.InitialPropsRecordingModule.recordProps(this.props);
+  }
+
+  render() {
     return <Text>dummy</Text>;
   }
-});
+}
 
 module.exports = InitialPropsTestApp;

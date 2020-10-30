@@ -1,60 +1,142 @@
-/**
- * Copyright (c) 2015-present, Facebook, Inc.
- * All rights reserved.
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  */
 
-#import "RCTPropsAnimatedNode.h"
-#import "RCTAnimationUtils.h"
-#import "RCTNativeAnimatedModule.h"
-#import "RCTStyleAnimatedNode.h"
-#import "RCTViewPropertyMapper.h"
+#import <React/RCTPropsAnimatedNode.h>
+
+#import <React/RCTAnimationUtils.h>
+#import <React/RCTLog.h>
+#import <React/RCTStyleAnimatedNode.h>
+#import <React/RCTUIManager.h>
+#import <React/RCTValueAnimatedNode.h>
 
 @implementation RCTPropsAnimatedNode
 {
-  RCTStyleAnimatedNode *_parentNode;
+  NSNumber *_connectedViewTag;
+  NSNumber *_rootTag;
+  NSString *_connectedViewName;
+  __weak RCTBridge *_bridge;
+  __weak id<RCTSurfacePresenterStub> _surfacePresenter;
+  NSMutableDictionary<NSString *, NSObject *> *_propsDictionary; // TODO: use RawProps or folly::dynamic directly
+  BOOL _managedByFabric;
 }
 
-- (void)onAttachedToNode:(RCTAnimatedNode *)parent
+- (instancetype)initWithTag:(NSNumber *)tag
+                     config:(NSDictionary<NSString *, id> *)config
 {
-  [super onAttachedToNode:parent];
-  if ([parent isKindOfClass:[RCTStyleAnimatedNode class]]) {
-    _parentNode = (RCTStyleAnimatedNode *)parent;
+  if (self = [super initWithTag:tag config:config]) {
+    _propsDictionary = [NSMutableDictionary new];
   }
+  return self;
 }
 
-- (void)onDetachedFromNode:(RCTAnimatedNode *)parent
+- (BOOL)isManagedByFabric
 {
-  [super onDetachedFromNode:parent];
-  if (_parentNode == parent) {
-    _parentNode = nil;
-  }
+  return _managedByFabric;
 }
 
-- (void)connectToView:(NSNumber *)viewTag animatedModule:(RCTNativeAnimatedModule *)animationModule
+- (void)connectToView:(NSNumber *)viewTag
+             viewName:(NSString *)viewName
+               bridge:(RCTBridge *)bridge
+     surfacePresenter:(id<RCTSurfacePresenterStub> )surfacePresenter
 {
-  _propertyMapper = [[RCTViewPropertyMapper alloc] initWithViewTag:viewTag animationModule:animationModule];
+  _bridge = bridge;
+  _surfacePresenter = surfacePresenter;
+  _connectedViewTag = viewTag;
+  _connectedViewName = viewName;
+  _managedByFabric = RCTUIManagerTypeForTagIsFabric(viewTag);
+  _rootTag = nil;
 }
 
 - (void)disconnectFromView:(NSNumber *)viewTag
 {
-  _propertyMapper = nil;
+  _bridge = nil;
+  _surfacePresenter = nil;
+  _connectedViewTag = nil;
+  _connectedViewName = nil;
+  _managedByFabric = NO;
+  _rootTag = nil;
+}
+
+- (void)updateView
+{
+  if (_managedByFabric) {
+    if (_bridge.surfacePresenter) {
+      [_bridge.surfacePresenter synchronouslyUpdateViewOnUIThread:_connectedViewTag
+      props:_propsDictionary];
+    } else {
+      [_surfacePresenter synchronouslyUpdateViewOnUIThread:_connectedViewTag
+      props:_propsDictionary];
+    }
+  } else {
+    [_bridge.uiManager synchronouslyUpdateViewOnUIThread:_connectedViewTag
+                                                viewName:_connectedViewName
+                                                   props:_propsDictionary];
+  }
+}
+
+- (void)restoreDefaultValues
+{
+  if (_managedByFabric) {
+    // Restoring to default values causes render of inconsistent state
+    // to the user because it isn't synchonised with Fabric's UIManager.
+    return;
+  }
+  // Restore the default value for all props that were modified by this node.
+  for (NSString *key in _propsDictionary.allKeys) {
+    _propsDictionary[key] = [NSNull null];
+  }
+
+  if (_propsDictionary.count) {
+    [self updateView];
+  }
+}
+
+- (NSString *)propertyNameForParentTag:(NSNumber *)parentTag
+{
+  __block NSString *propertyName;
+  [self.config[@"props"] enumerateKeysAndObjectsUsingBlock:^(NSString *_Nonnull property, NSNumber *_Nonnull tag, BOOL *_Nonnull stop) {
+    if ([tag isEqualToNumber:parentTag]) {
+      propertyName = property;
+      *stop = YES;
+    }
+  }];
+  return propertyName;
 }
 
 - (void)performUpdate
 {
   [super performUpdate];
-  [self performViewUpdatesIfNecessary];
-}
 
-- (void)performViewUpdatesIfNecessary
-{
-  NSDictionary *updates = [_parentNode updatedPropsDictionary];
-  if (updates.count) {
-    [_propertyMapper updateViewWithDictionary:updates];
+  // Since we are updating nodes after detaching them from views there is a time where it's
+  // possible that the view was disconnected and still receive an update, this is normal and we can
+  // simply skip that update.
+  if (!_connectedViewTag) {
+    return;
+  }
+
+  for (NSNumber *parentTag in self.parentNodes.keyEnumerator) {
+    RCTAnimatedNode *parentNode = [self.parentNodes objectForKey:parentTag];
+    if ([parentNode isKindOfClass:[RCTStyleAnimatedNode class]]) {
+      [self->_propsDictionary addEntriesFromDictionary:[(RCTStyleAnimatedNode *)parentNode propsDictionary]];
+
+    } else if ([parentNode isKindOfClass:[RCTValueAnimatedNode class]]) {
+      NSString *property = [self propertyNameForParentTag:parentTag];
+      id animatedObject = [(RCTValueAnimatedNode *)parentNode animatedObject];
+      if (animatedObject) {
+        self->_propsDictionary[property] = animatedObject;
+      } else {
+        CGFloat value = [(RCTValueAnimatedNode *)parentNode value];
+        self->_propsDictionary[property] = @(value);
+      }
+    }
+  }
+
+  if (_propsDictionary.count) {
+    [self updateView];
   }
 }
 

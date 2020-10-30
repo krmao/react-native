@@ -1,37 +1,35 @@
 /**
- * Copyright (c) 2013-present, Facebook, Inc.
- * All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  *
- * @providesModule PickerAndroidTestModule
+ * @format
  */
 
 'use strict';
 
-var BatchedBridge = require('BatchedBridge');
-var React = require('React');
-var RecordingModule = require('NativeModules').PickerAndroidRecordingModule;
-var Picker = require('Picker');
-var View = require('View');
+const React = require('react');
+const {NativeModules, Picker, View} = require('react-native');
+const BatchedBridge = require('react-native/Libraries/BatchedBridge/BatchedBridge');
 
-var Item = Picker.Item;
+const {Recording: RecordingModule} = NativeModules;
+const Item = Picker.Item;
 
-var appInstance;
-var PickerAndroidTestApp = React.createClass({
-  componentWillMount: function() {
+let appInstance;
+
+class PickerAndroidTestApp extends React.Component {
+  state = {
+    selected: 1,
+    mode: 'dropdown',
+    style: {},
+  };
+
+  UNSAFE_componentWillMount() {
     appInstance = this;
-  },
-  getInitialState: function() {
-    return {
-      selected: 1,
-      mode: 'dropdown',
-      style: {},
-    };
-  },
-  render: function() {
+  }
+
+  render() {
     return (
       <View collapsable={false}>
         <Picker
@@ -62,14 +60,15 @@ var PickerAndroidTestApp = React.createClass({
         </Picker>
       </View>
     );
-  },
-  onValueChange: function(value) {
+  }
+
+  onValueChange = value => {
     this.setState({selected: value});
     RecordingModule.recordSelection(value);
-  },
-});
+  };
+}
 
-var PickerAndroidTestModule = {
+const PickerAndroidTestModule = {
   PickerAndroidTestApp: PickerAndroidTestApp,
   selectItem: function(value) {
     appInstance.setState({selected: value});
@@ -84,7 +83,7 @@ var PickerAndroidTestModule = {
 
 BatchedBridge.registerCallableModule(
   'PickerAndroidTestModule',
-  PickerAndroidTestModule
+  PickerAndroidTestModule,
 );
 
 module.exports = PickerAndroidTestModule;

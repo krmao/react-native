@@ -1,48 +1,48 @@
 /**
- * Copyright (c) 2015-present, Facebook, Inc.
- * All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  *
- * @flow
+ * @format
+ * @flow strict-local
  */
+
 'use strict';
 
-var React = require('react');
-var ReactNative = require('react-native');
-var requestAnimationFrame = require('fbjs/lib/requestAnimationFrame');
+const React = require('react');
+const ReactNative = require('react-native');
 
-var {
-  StyleSheet,
-  View,
-} = ReactNative;
-var { TestModule } = ReactNative.NativeModules;
+const {StyleSheet, View} = ReactNative;
+const {TestModule} = ReactNative.NativeModules;
 
-var SimpleSnapshotTest = React.createClass({
+class SimpleSnapshotTest extends React.Component<{...}> {
   componentDidMount() {
     if (!TestModule.verifySnapshot) {
       throw new Error('TestModule.verifySnapshot not defined.');
     }
     requestAnimationFrame(() => TestModule.verifySnapshot(this.done));
-  },
+  }
 
-  done(success : boolean) {
+  done: (success: boolean) => void = (success: boolean) => {
     TestModule.markTestPassed(success);
-  },
+  };
 
-  render() {
+  render(): React.Node {
     return (
-      <View style={{backgroundColor: 'white', padding: 100}}>
+      <View style={styles.container}>
         <View style={styles.box1} />
         <View style={styles.box2} />
       </View>
     );
   }
-});
+}
 
-var styles = StyleSheet.create({
+const styles = StyleSheet.create({
+  container: {
+    backgroundColor: 'white',
+    padding: 100,
+  },
   box1: {
     width: 80,
     height: 50,

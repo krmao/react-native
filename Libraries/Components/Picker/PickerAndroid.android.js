@@ -1,137 +1,137 @@
 /**
- * Copyright (c) 2015-present, Facebook, Inc.
- * All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  *
- * @providesModule PickerAndroid
- * @flow
+ * @format
+ * @flow strict-local
  */
 
 'use strict';
 
-var ColorPropType = require('ColorPropType');
-var React = require('React');
-var ReactChildren = require('react/lib/ReactChildren');
-var ReactPropTypes = require('react/lib/ReactPropTypes');
-var StyleSheet = require('StyleSheet');
-var StyleSheetPropType = require('StyleSheetPropType');
-var View = require('View');
-var ViewStylePropTypes = require('ViewStylePropTypes');
+import AndroidDropdownPickerNativeComponent, {
+  Commands as AndroidDropdownPickerCommands,
+} from './AndroidDropdownPickerNativeComponent';
+import AndroidDialogPickerNativeComponent, {
+  Commands as AndroidDialogPickerCommands,
+} from './AndroidDialogPickerNativeComponent';
+import * as React from 'react';
+import StyleSheet from '../../StyleSheet/StyleSheet';
+import invariant from 'invariant';
+import processColor from '../../StyleSheet/processColor';
 
-var processColor = require('processColor');
-var requireNativeComponent = require('requireNativeComponent');
+import type {SyntheticEvent} from '../../Types/CoreEventTypes';
+import type {ColorValue, TextStyleProp} from '../../StyleSheet/StyleSheet';
 
-var REF_PICKER = 'picker';
-var MODE_DIALOG = 'dialog';
-var MODE_DROPDOWN = 'dropdown';
+type PickerItemSelectSyntheticEvent = SyntheticEvent<
+  $ReadOnly<{|
+    position: number,
+  |}>,
+>;
 
-var pickerStyleType = StyleSheetPropType({
-  ...ViewStylePropTypes,
-  color: ColorPropType,
-});
+type PickerItemValue = number | string;
 
-type Event = Object;
+type Props = $ReadOnly<{|
+  accessibilityLabel?: ?Stringish,
+  children?: React.Node,
+  style?: ?TextStyleProp,
+  backgroundColor?: ?ColorValue,
+  selectedValue?: ?PickerItemValue,
+  enabled?: ?boolean,
+  mode?: ?('dialog' | 'dropdown'),
+  onValueChange?: ?(itemValue: ?PickerItemValue, itemIndex: number) => mixed,
+  prompt?: ?string,
+  testID?: string,
+|}>;
 
 /**
  * Not exposed as a public API - use <Picker> instead.
  */
-var PickerAndroid = React.createClass({
+function PickerAndroid(props: Props): React.Node {
+  const pickerRef = React.useRef(null);
 
-  propTypes: {
-    ...View.propTypes,
-    style: pickerStyleType,
-    selectedValue: React.PropTypes.any,
-    enabled: ReactPropTypes.bool,
-    mode: ReactPropTypes.oneOf(['dialog', 'dropdown']),
-    onValueChange: ReactPropTypes.func,
-    prompt: ReactPropTypes.string,
-    testID: ReactPropTypes.string,
-  },
-
-  getInitialState: function() {
-    var state = this._stateFromProps(this.props);
-    return {
-      ...state,
-      initialSelectedIndex: state.selectedIndex,
-    };
-  },
-
-  componentWillReceiveProps: function(nextProps) {
-    this.setState(this._stateFromProps(nextProps));
-  },
-
-  // Translate prop and children into stuff that the native picker understands.
-  _stateFromProps: function(props) {
-    var selectedIndex = 0;
-    let items = ReactChildren.map(props.children, (child, index) => {
+  const [items, selected] = React.useMemo(() => {
+    // eslint-disable-next-line no-shadow
+    let selected = 0;
+    // eslint-disable-next-line no-shadow
+    const items = React.Children.map(props.children, (child, index) => {
+      if (child === null) {
+        return null;
+      }
       if (child.props.value === props.selectedValue) {
-        selectedIndex = index;
+        selected = index;
       }
-      let childProps = {
-        value: child.props.value,
-        label: child.props.label,
+      const {color, label} = child.props;
+      const processedColor = processColor(color);
+      invariant(
+        processedColor == null || typeof processedColor === 'number',
+        'Unexpected color given for PickerAndroid color prop',
+      );
+      return {
+        color: color == null ? null : processedColor,
+        label,
       };
-      if (child.props.color) {
-        childProps.color = processColor(child.props.color);
-      }
-      return childProps;
     });
-    return {selectedIndex, items};
-  },
+    return [items, selected];
+  }, [props.children, props.selectedValue]);
 
-  render: function() {
-    var Picker = this.props.mode === MODE_DROPDOWN ? DropdownPicker : DialogPicker;
+  const onSelect = React.useCallback(
+    ({nativeEvent}: PickerItemSelectSyntheticEvent) => {
+      const {position} = nativeEvent;
+      const onValueChange = props.onValueChange;
 
-    var nativeProps = {
-      enabled: this.props.enabled,
-      items: this.state.items,
-      mode: this.props.mode,
-      onSelect: this._onChange,
-      prompt: this.props.prompt,
-      selected: this.state.initialSelectedIndex,
-      testID: this.props.testID,
-      style: [styles.pickerAndroid, this.props.style],
-    };
-
-    return <Picker ref={REF_PICKER} {...nativeProps} />;
-  },
-
-  _onChange: function(event: Event) {
-    if (this.props.onValueChange) {
-      var position = event.nativeEvent.position;
-      if (position >= 0) {
-        var value = this.props.children[position].props.value;
-        this.props.onValueChange(value, position);
-      } else {
-        this.props.onValueChange(null, position);
+      if (onValueChange != null) {
+        if (position >= 0) {
+          const children = React.Children.toArray(props.children).filter(
+            item => item != null,
+          );
+          const value = children[position].props.value;
+          if (props.selectedValue !== value) {
+            onValueChange(value, position);
+          }
+        } else {
+          onValueChange(null, position);
+        }
       }
-    }
-    this._lastNativePosition = event.nativeEvent.position;
-    this.forceUpdate();
-  },
+      const {current} = pickerRef;
+      if (current != null && position !== selected) {
+        const Commands =
+          props.mode === 'dropdown'
+            ? AndroidDropdownPickerCommands
+            : AndroidDialogPickerCommands;
+        Commands.setNativeSelectedPosition(current, position);
+      }
+    },
+    [
+      props.children,
+      props.onValueChange,
+      props.selectedValue,
+      props.mode,
+      selected,
+    ],
+  );
 
-  componentDidMount: function() {
-    this._lastNativePosition = this.state.initialSelectedIndex;
-  },
+  const rootProps = {
+    accessibilityLabel: props.accessibilityLabel,
+    enabled: props.enabled,
+    items,
+    onSelect,
+    prompt: props.prompt,
+    ref: pickerRef,
+    selected,
+    style: StyleSheet.compose(styles.pickerAndroid, props.style),
+    backgroundColor: props.backgroundColor,
+    testID: props.testID,
+  };
+  return props.mode === 'dropdown' ? (
+    <AndroidDropdownPickerNativeComponent {...rootProps} />
+  ) : (
+    <AndroidDialogPickerNativeComponent {...rootProps} />
+  );
+}
 
-  componentDidUpdate: function() {
-    // The picker is a controlled component. This means we expect the
-    // on*Change handlers to be in charge of updating our
-    // `selectedValue` prop. That way they can also
-    // disallow/undo/mutate the selection of certain values. In other
-    // words, the embedder of this component should be the source of
-    // truth, not the native component.
-    if (this.refs[REF_PICKER] && this.state.selectedIndex !== this._lastNativePosition) {
-      this.refs[REF_PICKER].setNativeProps({selected: this.state.selectedIndex});
-      this._lastNativePosition = this.state.selectedIndex;
-    }
-  },
-});
-
-var styles = StyleSheet.create({
+const styles = StyleSheet.create({
   pickerAndroid: {
     // The picker will conform to whatever width is given, but we do
     // have to set the component's height explicitly on the
@@ -141,15 +141,5 @@ var styles = StyleSheet.create({
     height: 50,
   },
 });
-
-var cfg = {
-  nativeOnly: {
-    items: true,
-    selected: true,
-  }
-};
-
-var DropdownPicker = requireNativeComponent('AndroidDropdownPicker', PickerAndroid, cfg);
-var DialogPicker = requireNativeComponent('AndroidDialogPicker', PickerAndroid, cfg);
 
 module.exports = PickerAndroid;

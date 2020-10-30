@@ -1,94 +1,192 @@
 /**
- * Copyright (c) 2015-present, Facebook, Inc.
- * All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  *
- * @providesModule ActivityIndicator
+ * @format
  * @flow
+ * @generate-docs
  */
+
 'use strict';
 
-const ColorPropType = require('ColorPropType');
-const NativeMethodsMixin = require('react/lib/NativeMethodsMixin');
-const Platform = require('Platform');
-const PropTypes = require('react/lib/ReactPropTypes');
-const React = require('React');
-const StyleSheet = require('StyleSheet');
-const View = require('View');
+const Platform = require('../../Utilities/Platform');
+const React = require('react');
+const StyleSheet = require('../../StyleSheet/StyleSheet');
+const View = require('../View/View');
+import type {HostComponent} from '../../Renderer/shims/ReactNativeTypes';
+import type {ViewProps} from '../View/ViewPropTypes';
+import type {ColorValue} from '../../StyleSheet/StyleSheet';
 
-const requireNativeComponent = require('requireNativeComponent');
+const PlatformActivityIndicator =
+  Platform.OS === 'android'
+    ? require('../ProgressBarAndroid/ProgressBarAndroid')
+    : require('./ActivityIndicatorViewNativeComponent').default;
 
 const GRAY = '#999999';
 
-/**
- * Displays a circular loading indicator.
- */
-const ActivityIndicator = React.createClass({
-  mixins: [NativeMethodsMixin],
+type IndicatorSize = number | 'small' | 'large';
 
-  propTypes: {
-    ...View.propTypes,
-    /**
-     * Whether to show the indicator (true, the default) or hide it (false).
-     */
-    animating: PropTypes.bool,
-    /**
-     * The foreground color of the spinner (default is gray).
-     */
-    color: ColorPropType,
-    /**
-     * Size of the indicator. Small has a height of 20, large has a height of 36.
-     * Other sizes can be obtained using a scale transform.
-     */
-    size: PropTypes.oneOf([
-      'small',
-      'large',
-    ]),
-    /**
-     * Whether the indicator should hide when not animating (true by default).
-     *
-     * @platform ios
-     */
-    hidesWhenStopped: PropTypes.bool,
-  },
+type IOSProps = $ReadOnly<{|
+  /**
+    Whether the indicator should hide when not animating.
 
-  getDefaultProps() {
-    return {
-      animating: true,
-      color: Platform.OS === 'ios' ? GRAY : undefined,
-      hidesWhenStopped: true,
-      size: 'small',
-    };
-  },
+    @platform ios
+  */
+  hidesWhenStopped?: ?boolean,
+|}>;
+type Props = $ReadOnly<{|
+  ...ViewProps,
+  ...IOSProps,
 
-  render() {
-    const {onLayout, style, ...props} = this.props;
-    let sizeStyle;
-    switch (props.size) {
-      case 'small':
-        sizeStyle = styles.sizeSmall;
-        break;
-      case 'large':
-        sizeStyle = styles.sizeLarge;
-        break;
-    }
-    return (
-      <View
-        onLayout={onLayout}
-        style={[styles.container, style]}>
-        <RCTActivityIndicator
-          {...props}
-          style={sizeStyle}
-          styleAttr="Normal"
-          indeterminate
-        />
-      </View>
-    );
+  /**
+   	Whether to show the indicator (`true`) or hide it (`false`).
+   */
+  animating?: ?boolean,
+
+  /**
+    The foreground color of the spinner.
+
+    @default {@platform android} `null` (system accent default color)
+    @default {@platform ios} '#999999'
+  */
+  color?: ?ColorValue,
+
+  /**
+    Size of the indicator.
+
+    @type enum(`'small'`, `'large'`)
+    @type {@platform android} number
+  */
+  size?: ?IndicatorSize,
+|}>;
+
+const ActivityIndicator = (props: Props, forwardedRef?: any) => {
+  const {onLayout, style, size, ...restProps} = props;
+  let sizeStyle;
+  let sizeProp;
+
+  switch (size) {
+    case 'small':
+      sizeStyle = styles.sizeSmall;
+      sizeProp = 'small';
+      break;
+    case 'large':
+      sizeStyle = styles.sizeLarge;
+      sizeProp = 'large';
+      break;
+    default:
+      sizeStyle = {height: props.size, width: props.size};
+      break;
   }
-});
+
+  const nativeProps = {
+    ...restProps,
+    ref: forwardedRef,
+    style: sizeStyle,
+    size: sizeProp,
+  };
+
+  const androidProps = {
+    styleAttr: 'Normal',
+    indeterminate: true,
+  };
+
+  return (
+    <View
+      onLayout={onLayout}
+      style={StyleSheet.compose(styles.container, style)}>
+      {Platform.OS === 'android' ? (
+        // $FlowFixMe Flow doesn't know when this is the android component
+        <PlatformActivityIndicator {...nativeProps} {...androidProps} />
+      ) : (
+        /* $FlowFixMe(>=0.106.0 site=react_native_android_fb) This comment
+         * suppresses an error found when Flow v0.106 was deployed. To see the
+         * error, delete this comment and run Flow. */
+        <PlatformActivityIndicator {...nativeProps} />
+      )}
+    </View>
+  );
+};
+
+/**
+  Displays a circular loading indicator.
+
+  ```SnackPlayer name=ActivityIndicator%20Function%20Component%20Example
+  import React from "react";
+  import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+
+  const App = () => (
+    <View style={[styles.container, styles.horizontal]}>
+      <ActivityIndicator />
+      <ActivityIndicator size="large" />
+      <ActivityIndicator size="small" color="#0000ff" />
+      <ActivityIndicator size="large" color="#00ff00" />
+    </View>
+  );
+
+  const styles = StyleSheet.create({
+    container: {
+      flex: 1,
+      justifyContent: "center"
+    },
+    horizontal: {
+      flexDirection: "row",
+      justifyContent: "space-around",
+      padding: 10
+    }
+  });
+  export default App;
+  ```
+
+  ```SnackPlayer name=ActivityIndicator%20Class%20Component%20Example
+  import React, { Component } from "react";
+  import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+
+  class App extends Component {
+    render() {
+      return (
+        <View style={[styles.container, styles.horizontal]}>
+          <ActivityIndicator />
+          <ActivityIndicator size="large" />
+          <ActivityIndicator size="small" color="#0000ff" />
+          <ActivityIndicator size="large" color="#00ff00" />
+        </View>
+      );
+    }
+  }
+
+  const styles = StyleSheet.create({
+    container: {
+      flex: 1,
+      justifyContent: "center"
+    },
+    horizontal: {
+      flexDirection: "row",
+      justifyContent: "space-around",
+      padding: 10
+    }
+  });
+  export default App;
+  ```
+*/
+
+const ActivityIndicatorWithRef: React.AbstractComponent<
+  Props,
+  HostComponent<mixed>,
+> = React.forwardRef(ActivityIndicator);
+ActivityIndicatorWithRef.displayName = 'ActivityIndicator';
+
+/* $FlowFixMe(>=0.89.0 site=react_native_fb) This comment suppresses an error
+ * found when Flow v0.89 was deployed. To see the error, delete this comment
+ * and run Flow. */
+ActivityIndicatorWithRef.defaultProps = {
+  animating: true,
+  color: Platform.OS === 'ios' ? GRAY : null,
+  hidesWhenStopped: true,
+  size: 'small',
+};
 
 const styles = StyleSheet.create({
   container: {
@@ -105,23 +203,4 @@ const styles = StyleSheet.create({
   },
 });
 
-if (Platform.OS === 'ios') {
-  var RCTActivityIndicator = requireNativeComponent(
-    'RCTActivityIndicatorView',
-    ActivityIndicator,
-    {nativeOnly: {activityIndicatorViewStyle: true}},
-  );
-} else if (Platform.OS === 'android') {
-  var RCTActivityIndicator = requireNativeComponent(
-    'AndroidProgressBar',
-    ActivityIndicator,
-    // Ignore props that are specific to non inderterminate ProgressBar.
-    {nativeOnly: {
-      indeterminate: true,
-      progress: true,
-      styleAttr: true,
-    }},
-  );
-}
-
-module.exports = ActivityIndicator;
+module.exports = ActivityIndicatorWithRef;

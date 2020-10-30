@@ -1,21 +1,25 @@
 /**
- * Copyright (c) 2015-present, Facebook, Inc.
- * All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  *
- * @providesModule JSEventLoopWatchdog
+ * @format
  * @flow
  */
+
 'use strict';
 
-const performanceNow = require('performanceNow');
+const infoLog = require('../Utilities/infoLog');
 
 type Handler = {
-  onIterate?: () => void;
-  onStall: (params: {lastInterval: number}) => string;
+  onIterate?: () => void,
+  onStall: (params: {
+    lastInterval: number,
+    busyTime: number,
+    ...
+  }) => ?string,
+  ...
 };
 
 /**
@@ -35,38 +39,39 @@ const JSEventLoopWatchdog = {
     return {stallCount, totalStallTime, longestStall, acceptableBusyTime};
   },
   reset: function() {
-    console.log('JSEventLoopWatchdog: reset');
+    infoLog('JSEventLoopWatchdog: reset');
     totalStallTime = 0;
     stallCount = 0;
     longestStall = 0;
-    lastInterval = performanceNow();
+    lastInterval = global.performance.now();
   },
   addHandler: function(handler: Handler) {
     handlers.push(handler);
   },
-  install: function({thresholdMS}: {thresholdMS: number}) {
+  install: function({thresholdMS}: {thresholdMS: number, ...}) {
     acceptableBusyTime = thresholdMS;
     if (installed) {
       return;
     }
     installed = true;
-    lastInterval = performanceNow();
+    lastInterval = global.performance.now();
     function iteration() {
-      const now = performanceNow();
+      const now = global.performance.now();
       const busyTime = now - lastInterval;
       if (busyTime >= thresholdMS) {
         const stallTime = busyTime - thresholdMS;
         stallCount++;
         totalStallTime += stallTime;
         longestStall = Math.max(longestStall, stallTime);
-        let msg = `JSEventLoopWatchdog: JS thread busy for ${busyTime}ms. ` +
+        let msg =
+          `JSEventLoopWatchdog: JS thread busy for ${busyTime}ms. ` +
           `${totalStallTime}ms in ${stallCount} stalls so far. `;
-        handlers.forEach((handler) => {
-          msg += handler.onStall({lastInterval});
+        handlers.forEach(handler => {
+          msg += handler.onStall({lastInterval, busyTime}) || '';
         });
-        console.log(msg);
+        infoLog(msg);
       }
-      handlers.forEach((handler) => {
+      handlers.forEach(handler => {
         handler.onIterate && handler.onIterate();
       });
       lastInterval = now;

@@ -1,43 +1,52 @@
-/**
- * Copyright (c) 2015-present, Facebook, Inc.
- * All rights reserved.
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
  */
 
 package com.facebook.react.bridge;
 
 import android.content.Context;
+import com.facebook.react.common.DebugServerException;
 
 /**
- * A class that stores JS bundle information and allows {@link CatalystInstance} to load a correct
- * bundle through {@link ReactBridge}.
+ * A class that stores JS bundle information and allows a {@link JSBundleLoaderDelegate} (e.g.
+ * {@link CatalystInstance}) to load a correct bundle through {@link ReactBridge}.
  */
 public abstract class JSBundleLoader {
 
   /**
    * This loader is recommended one for release version of your app. In that case local JS executor
-   * should be used. JS bundle will be read from assets directory in native code to save on passing
-   * large strings from java to native memory.
+   * should be used. JS bundle will be read from assets in native code to save on passing large
+   * strings from java to native memory.
    */
-  public static JSBundleLoader createFileLoader(
-      final Context context,
-      final String fileName) {
+  public static JSBundleLoader createAssetLoader(
+      final Context context, final String assetUrl, final boolean loadSynchronously) {
     return new JSBundleLoader() {
       @Override
-      public void loadScript(ReactBridge bridge) {
-        if (fileName.startsWith("assets://")) {
-          bridge.loadScriptFromAssets(context.getAssets(), fileName.replaceFirst("assets://", ""));
-        } else {
-          bridge.loadScriptFromFile(fileName, "file://" + fileName);
-        }
+      public String loadScript(JSBundleLoaderDelegate delegate) {
+        delegate.loadScriptFromAssets(context.getAssets(), assetUrl, loadSynchronously);
+        return assetUrl;
       }
+    };
+  }
 
+  /**
+   * This loader loads bundle from file system. The bundle will be read in native code to save on
+   * passing large strings from java to native memory.
+   */
+  public static JSBundleLoader createFileLoader(final String fileName) {
+    return createFileLoader(fileName, fileName, false);
+  }
+
+  public static JSBundleLoader createFileLoader(
+      final String fileName, final String assetUrl, final boolean loadSynchronously) {
+    return new JSBundleLoader() {
       @Override
-      public String getSourceUrl() {
-        return (fileName.startsWith("assets://") ? "" : "file://") + fileName;
+      public String loadScript(JSBundleLoaderDelegate delegate) {
+        delegate.loadScriptFromFile(fileName, assetUrl, loadSynchronously);
+        return fileName;
       }
     };
   }
@@ -50,17 +59,35 @@ public abstract class JSBundleLoader {
    * work correctly and allows for source maps to correctly symbolize those.
    */
   public static JSBundleLoader createCachedBundleFromNetworkLoader(
-      final String sourceURL,
-      final String cachedFileLocation) {
+      final String sourceURL, final String cachedFileLocation) {
     return new JSBundleLoader() {
       @Override
-      public void loadScript(ReactBridge bridge) {
-        bridge.loadScriptFromFile(cachedFileLocation, sourceURL);
+      public String loadScript(JSBundleLoaderDelegate delegate) {
+        try {
+          delegate.loadScriptFromFile(cachedFileLocation, sourceURL, false);
+          return sourceURL;
+        } catch (Exception e) {
+          throw DebugServerException.makeGeneric(sourceURL, e.getMessage(), e);
+        }
       }
+    };
+  }
 
+  /**
+   * Same as {{@link JSBundleLoader#createCachedBundleFromNetworkLoader(String, String)}}, but for
+   * split bundles in development.
+   */
+  public static JSBundleLoader createCachedSplitBundleFromNetworkLoader(
+      final String sourceURL, final String cachedFileLocation) {
+    return new JSBundleLoader() {
       @Override
-      public String getSourceUrl() {
-        return sourceURL;
+      public String loadScript(JSBundleLoaderDelegate delegate) {
+        try {
+          delegate.loadSplitBundleFromFile(cachedFileLocation, sourceURL);
+          return sourceURL;
+        } catch (Exception e) {
+          throw DebugServerException.makeGeneric(sourceURL, e.getMessage(), e);
+        }
       }
     };
   }
@@ -68,26 +95,18 @@ public abstract class JSBundleLoader {
   /**
    * This loader is used when proxy debugging is enabled. In that case there is no point in fetching
    * the bundle from device as remote executor will have to do it anyway.
-   *
-   * @param proxySourceURL the URL to load the JS bundle from in the JavaScript proxy
-   * @param realSourceURL the URL to report as the source URL, e.g. for asset loading
    */
   public static JSBundleLoader createRemoteDebuggerBundleLoader(
-      final String proxySourceURL,
-      final String realSourceURL) {
+      final String proxySourceURL, final String realSourceURL) {
     return new JSBundleLoader() {
       @Override
-      public void loadScript(ReactBridge bridge) {
-        bridge.loadScriptFromFile(null, proxySourceURL);
-      }
-
-      @Override
-      public String getSourceUrl() {
+      public String loadScript(JSBundleLoaderDelegate delegate) {
+        delegate.setSourceURLs(realSourceURL, proxySourceURL);
         return realSourceURL;
       }
     };
   }
 
-  public abstract void loadScript(ReactBridge bridge);
-  public abstract String getSourceUrl();
+  /** Loads the script, returning the URL of the source it loaded. */
+  public abstract String loadScript(JSBundleLoaderDelegate delegate);
 }
